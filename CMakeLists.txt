@@ -16,7 +16,7 @@ foreach(lib avcodec avformat avutil swresample swscale)
     endif()
 endforeach()
 
-add_executable(AmazingPlayer main.cpp)
+add_executable(AmazingPlayer src/main.cpp)
 
 target_link_libraries(AmazingPlayer
         PRIVATE

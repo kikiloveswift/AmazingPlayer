@@ -16,7 +16,9 @@ foreach(lib avcodec avformat avutil swresample swscale)
     endif()
 endforeach()
 
-add_executable(AmazingPlayer src/main.cpp)
+add_executable(AmazingPlayer src/main.cpp
+        src/Render/TriangleRenderer.cpp
+        src/Render/TriangleRenderer.h)
 
 target_link_libraries(AmazingPlayer
         PRIVATE

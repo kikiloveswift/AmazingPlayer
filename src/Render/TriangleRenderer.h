@@ -31,8 +31,8 @@ private:
     unsigned int VAO, VBO;
 
     // 窗口参数
-    static const int WINDOW_WIDTH = 800 * 2;
-    static const int WINDOW_HEIGHT = 600 * 2;
+    static const int WINDOW_WIDTH = 800;
+    static const int WINDOW_HEIGHT = 600;
 
     // 私有方法
     bool InitializeSDL();
@@ -47,7 +47,7 @@ private:
     void CheckShaderCompileError(unsigned int shader, const char* type);
 
     // OpenGL 运行时检查
-    void TriangleRenderer::CheckOpenGLError(const char* operation);
+    void CheckOpenGLError(const char* operation);
 };
 
 #endif // TRIANGLERENDERER_H

@@ -6,19 +6,21 @@ set(CMAKE_CXX_STANDARD 17)
 find_package(glad REQUIRED)
 find_package(SDL2 REQUIRED)
 find_package(ffmpeg REQUIRED)
-get_property(allTargets DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY BUILDSYSTEM_TARGETS)
-message(STATUS "ALL CMake targets: ${allTargets}")
-foreach(lib avcodec avformat avutil swresample swscale)
-    if(TARGET ffmpeg::${lib})
-        message(STATUS "ffmpeg::${lib} is FOUND")
-    else()
-        message(WARNING "ffmpeg::${lib} is NOT found")
-    endif()
-endforeach()
+#get_property(allTargets DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY BUILDSYSTEM_TARGETS)
+#message(STATUS "ALL CMake targets: ${allTargets}")
+#foreach(lib avcodec avformat avutil swresample swscale)
+#    if(TARGET ffmpeg::${lib})
+#        message(STATUS "ffmpeg::${lib} is FOUND")
+#    else()
+#        message(WARNING "ffmpeg::${lib} is NOT found")
+#    endif()
+#endforeach()
 
 add_executable(AmazingPlayer src/main.cpp
         src/Render/TriangleRenderer.cpp
-        src/Render/TriangleRenderer.h)
+        src/Render/TriangleRenderer.h
+        src/Render/PlayerRender.cpp
+        src/Render/PlayerRender.h)
 
 target_link_libraries(AmazingPlayer
         PRIVATE

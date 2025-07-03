@@ -112,7 +112,7 @@ bool TriangleRenderer::InitializeSDL() {
 
     // 创建窗口
     window = SDL_CreateWindow(
-        "OpenGL Triangle - AmazingPlayer",
+        "AmazingPlayer",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         WINDOW_WIDTH, WINDOW_HEIGHT,
         SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN

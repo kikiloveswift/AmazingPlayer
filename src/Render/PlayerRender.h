@@ -9,6 +9,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <atomic>
+#include <climits>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -19,8 +20,7 @@ extern "C" {
 #include <libswresample/swresample.h>
 }
 
-// 调试模式控制 - 在编译时定义 ENABLE_DEBUG 来启用调试功能
-// g++ -DENABLE_DEBUG ...
+// 调试模式控制
 #ifdef ENABLE_DEBUG
     #define DEBUG_ENABLED 1
 #else
@@ -46,6 +46,9 @@ private:
     static constexpr int WIN_H = 720;
     static constexpr int MAX_VQ = 48;
     static constexpr int AUDIO_CACHE_MS = 1000;
+    static constexpr double SYNC_THRESHOLD = 0.03; // 30ms同步阈值
+    static constexpr double MAX_AHEAD = 0.1;       // 视频最大领先100ms
+    static constexpr double MAX_BEHIND = 0.5;      // 视频最大落后500ms
 
     SDL_Window*   win = nullptr;
     SDL_GLContext gl  = nullptr;
@@ -64,7 +67,15 @@ private:
     int vw = 0, vh = 0;
     double videoFPS = 25.0;
 
-    std::queue<AVFrame*> vq;
+    // 帧数据结构
+    struct FrameData {
+        int width = 0;
+        int height = 0;
+        uint8_t* data = nullptr;  // RGB24数据
+        double pts = -1.0;        // 时间戳
+    };
+
+    std::queue<FrameData> vq;
     std::mutex   qMtx;
     std::condition_variable qCv;
     std::thread  decThread;
@@ -84,6 +95,7 @@ private:
         double totalDiff = 0.0;       // 总时间差
         int frameCount = 0;           // 已渲染帧数
         int dropCount = 0;            // 丢弃帧数
+        int skipCount = 0;            // 跳帧数
         int lateCount = 0;            // 延迟帧数
     } syncStats;
 
@@ -101,7 +113,7 @@ private:
     double getAudioClock() const;
     void   renderOne();
     void   handleEvents(bool& running);
-
+    void processVideoFrame(AVFrame* frame);
     #if DEBUG_ENABLED
     void logDebug(const std::string& message) const;
     void resetStats();

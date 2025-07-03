@@ -4,9 +4,10 @@
 #include <chrono>
 #include <sstream>
 #include <iomanip>
+#include <algorithm>
 
 #if DEBUG_ENABLED
-#include <fstream> // 用于调试日志记录
+#include <fstream>
 #endif
 
 /* ========== GLSL ========== */
@@ -172,7 +173,7 @@ void PlayerRender::Stop()
     {
         std::lock_guard<std::mutex> lock(qMtx);
         while (!vq.empty()) {
-            av_frame_free(&vq.front());
+            delete[] vq.front().data;
             vq.pop();
         }
     }
@@ -629,7 +630,8 @@ double PlayerRender::getAudioClock() const
     Uint32 queuedBytes = SDL_GetQueuedAudioSize(audioDev);
     double queuedSeconds = queuedBytes / static_cast<double>(bytesPerSec);
 
-    return audioWritePts.load() - queuedSeconds;
+    // 添加缓冲时间补偿（约50ms）
+    return audioWritePts.load() - queuedSeconds - 0.05;
 }
 
 /* ---- 解码线程 ---- */
@@ -637,6 +639,12 @@ void PlayerRender::decodeLoop()
 {
     int audioFrames = 0;
     int videoFrames = 0;
+    int skipCounter = 0; // 跳帧计数器
+    int skipThreshold = 1; // 初始跳帧阈值
+
+    #if DEBUG_ENABLED
+    auto lastStatusTime = std::chrono::steady_clock::now();
+    #endif
 
     while (!stopReq) {
         // 读取数据包
@@ -658,11 +666,8 @@ void PlayerRender::decodeLoop()
                         break;
                     }
 
-                    // 将帧加入队列
-                    {
-                        std::unique_lock<std::mutex> lock(qMtx);
-                        vq.push(frame);
-                    }
+                    // 处理视频帧（与正常流程相同）
+                    processVideoFrame(frame);
                     videoFrames++;
                 }
 
@@ -723,26 +728,18 @@ void PlayerRender::decodeLoop()
                     break;
                 }
 
-                // 将帧加入队列
-                {
-                    std::unique_lock<std::mutex> lock(qMtx);
-
-                    // 等待队列有空间
-                    while (vq.size() >= MAX_VQ && !stopReq) {
-                        lock.unlock();
-                        SDL_Delay(5); // 避免忙等待
-                        lock.lock();
-                    }
-
-                    if (stopReq) break;
-
-                    // 复制帧
-                    AVFrame* frame = av_frame_clone(vf);
-                    if (frame) {
-                        vq.push(frame);
-                        videoFrames++;
-                    }
+                // 自适应跳帧策略
+                if (skipCounter % skipThreshold == 0) {
+                    // 处理视频帧
+                    processVideoFrame(av_frame_clone(vf));
+                    videoFrames++;
+                } else {
+                    #if DEBUG_ENABLED
+                    syncStats.skipCount++;
+                    #endif
                 }
+
+                skipCounter++;
 
                 av_frame_unref(vf);
             }
@@ -810,22 +807,90 @@ void PlayerRender::decodeLoop()
         }
 
         av_packet_unref(pkt);
+
+        #if DEBUG_ENABLED
+        // 定期报告队列状态
+        auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::seconds>(now - lastStatusTime).count() >= 1) {
+            std::unique_lock<std::mutex> lock(qMtx);
+            std::cout << "[STATUS] Video queue: " << vq.size()
+                      << "/" << MAX_VQ << ", Skip threshold: " << skipThreshold << "\n";
+            lastStatusTime = now;
+        }
+        #endif
+
+        // 动态调整跳帧阈值
+        {
+            std::unique_lock<std::mutex> lock(qMtx);
+            if (vq.size() > MAX_VQ * 0.6) {
+                skipThreshold = std::min(skipThreshold + 1, 8); // 更积极跳帧
+            } else if (vq.size() < MAX_VQ * 0.3) {
+                skipThreshold = std::max(skipThreshold - 1, 1); // 减少跳帧
+            } else {
+                skipThreshold = std::clamp(skipThreshold, 2, 4); // 中等队列保持稳定
+            }
+        }
     }
 
     std::cout << "Decoding thread exited\n";
 }
 
+/* ---- 处理视频帧 ---- */
+void PlayerRender::processVideoFrame(AVFrame* frame)
+{
+    if (!frame) return;
+
+    // 转换像素格式
+    uint8_t* dst[4] = {vidBuf, nullptr, nullptr, nullptr};
+    int dstStride[4] = {vw * 3, 0, 0, 0};
+
+    sws_scale(sws, frame->data, frame->linesize,
+             0, vh, dst, dstStride);
+
+    // 准备帧数据
+    FrameData fd;
+    fd.width = vw;
+    fd.height = vh;
+    fd.data = new uint8_t[vw * vh * 3];
+    memcpy(fd.data, vidBuf, vw * vh * 3);
+
+    if (frame->pts != AV_NOPTS_VALUE) {
+        fd.pts = frame->pts * av_q2d(fmt->streams[vIdx]->time_base);
+    } else if (frame->pkt_dts != AV_NOPTS_VALUE) {
+        fd.pts = frame->pkt_dts * av_q2d(fmt->streams[vIdx]->time_base);
+    } else {
+        fd.pts = -1.0;
+    }
+
+    // 将帧加入队列
+    {
+        std::unique_lock<std::mutex> lock(qMtx);
+
+        // 自适应队列管理：队列满时丢弃最旧帧
+        if (vq.size() >= MAX_VQ) {
+            #if DEBUG_ENABLED
+            syncStats.dropCount++;
+            #endif
+            delete[] vq.front().data;
+            vq.pop();
+        }
+
+        vq.push(fd);
+    }
+
+    av_frame_free(&frame);
+}
+
 /* ---- renderOne ---- */
 void PlayerRender::renderOne()
 {
-    AVFrame* frame = nullptr;
+    FrameData fd;
     bool hasFrame = false;
 
     {
         std::unique_lock<std::mutex> lock(qMtx);
-
         if (!vq.empty()) {
-            frame = vq.front();
+            fd = vq.front();
             vq.pop();
             hasFrame = true;
         }
@@ -835,30 +900,50 @@ void PlayerRender::renderOne()
         return;
     }
 
-    // 确保有有效的帧
-    if (!frame || !frame->data[0]) {
-        if (frame) av_frame_free(&frame);
-        return;
+    // ===== 音画同步控制 =====
+    double audioTime = 0.0;
+    if (aIdx != -1 && fd.pts >= 0) {
+        audioTime = getAudioClock();
+        double diff = fd.pts - audioTime;
+
+        // 视频领先过多：等待音频追上
+        if (diff > MAX_AHEAD) {
+            double waitTime = diff - MAX_AHEAD;
+            // 限制最大等待时间（不超过40ms）
+            waitTime = std::min(waitTime, 0.04);
+            int waitMs = static_cast<int>(waitTime * 1000);
+            SDL_Delay(waitMs);
+
+            // 更新音频时钟
+            audioTime = getAudioClock();
+            diff = fd.pts - audioTime;
+        }
+
+        // 视频落后过多：跳过此帧
+        if (diff < -MAX_BEHIND) {
+            #if DEBUG_ENABLED
+            syncStats.lateCount++;
+            #endif
+            delete[] fd.data;
+            // 递归调用自己，取下一帧
+            renderOne();
+            return;
+        }
     }
+
+    // 上传纹理
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, fd.width, fd.height,
+                   GL_RGB, GL_UNSIGNED_BYTE, fd.data);
+
+    // 释放帧数据内存
+    delete[] fd.data;
 
     #if DEBUG_ENABLED
     // 调试模式下收集音画同步数据
-    double master = 0.0;
-    double pts = 0.0;
-    double diff = 0.0;
-
-    if (audioReady.load() && aIdx != -1) {
-        master = getAudioClock();
-
-        if (frame->pts != AV_NOPTS_VALUE) {
-            pts = frame->pts * av_q2d(fmt->streams[vIdx]->time_base);
-        } else if (frame->pkt_dts != AV_NOPTS_VALUE) {
-            pts = frame->pkt_dts * av_q2d(fmt->streams[vIdx]->time_base);
-        } else {
-            pts = master;
-        }
-
-        diff = pts - master;
+    if (audioReady.load() && aIdx != -1 && fd.pts >= 0) {
+        double master = getAudioClock();
+        double diff = fd.pts - master;
 
         // 收集统计信息
         syncStats.frameCount++;
@@ -877,28 +962,13 @@ void PlayerRender::renderOne()
         // 调试输出
         if (debugOutput) {
             std::ostringstream oss;
-            oss << "Frame PTS: " << std::fixed << std::setprecision(3) << pts
+            oss << "Frame PTS: " << std::fixed << std::setprecision(3) << fd.pts
                 << " | Audio: " << master
                 << " | Diff: " << diff * 1000 << " ms";
             logDebug(oss.str());
         }
     }
     #endif
-
-    // 转换像素格式
-    uint8_t* dst[4] = {vidBuf, nullptr, nullptr, nullptr};
-    int dstStride[4] = {vw * 3, 0, 0, 0};
-
-    sws_scale(sws, frame->data, frame->linesize,
-             0, vh, dst, dstStride);
-
-    // 上传纹理
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, vw, vh,
-                   GL_RGB, GL_UNSIGNED_BYTE, vidBuf);
-
-    // 释放帧
-    av_frame_free(&frame);
 }
 
 /* ---- 事件处理 ---- */
@@ -1032,6 +1102,7 @@ void PlayerRender::printSyncStats() const {
     std::cout << "\n===== 音画同步统计 =====\n";
     std::cout << "已渲染帧数: " << syncStats.frameCount << "\n";
     std::cout << "丢弃帧数: " << syncStats.dropCount << "\n";
+    std::cout << "跳帧数: " << syncStats.skipCount << "\n";
     std::cout << "延迟帧数: " << syncStats.lateCount << "\n";
     std::cout << "平均时间差: " << avgDiff * 1000 << " ms\n";
     std::cout << "视频最大领先: " << syncStats.maxVideoLead * 1000 << " ms\n";

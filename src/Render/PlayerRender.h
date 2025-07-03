@@ -70,8 +70,7 @@ private:
     /* ---------- 音频时钟 ---------- */
     std::atomic<double> audioWritePts{0.0};             // 下一采样绝对 PTS
     std::atomic<bool>   audioReady{false};
-    double audioBasePts = NAN;
-    double videoBasePts = NAN;
+
     /* ---------- 缓冲 ---------- */
     uint8_t* vidBuf = nullptr;                          // RGB24
     uint8_t* audBuf = nullptr;                          // 重采样输出

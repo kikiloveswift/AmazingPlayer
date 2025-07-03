@@ -8,7 +8,7 @@
 #include <cstring>
 
 // 顶点着色器源码
-const char* vertexShaderSource = R"(
+const char* TriangleVertexShaderSource = R"(
 #version 330 core
 layout (location = 0) in vec3 aPos;
 
@@ -19,7 +19,7 @@ void main()
 )";
 
 // 片段着色器源码
-const char* fragmentShaderSource = R"(
+const char* TriangleFragmentShaderSource = R"(
 #version 330 core
 out vec4 FragColor;
 
@@ -153,11 +153,11 @@ bool TriangleRenderer::InitializeOpenGL() {
 
 bool TriangleRenderer::CreateShaders() {
     // 编译顶点着色器
-    unsigned int vertexShader = CompileShader(GL_VERTEX_SHADER, vertexShaderSource);
+    unsigned int vertexShader = CompileShader(GL_VERTEX_SHADER, TriangleVertexShaderSource);
     if (vertexShader == 0) return false;
 
     // 编译片段着色器
-    unsigned int fragmentShader = CompileShader(GL_FRAGMENT_SHADER, fragmentShaderSource);
+    unsigned int fragmentShader = CompileShader(GL_FRAGMENT_SHADER, TriangleFragmentShaderSource);
     if (fragmentShader == 0) {
         glDeleteShader(vertexShader);
         return false;

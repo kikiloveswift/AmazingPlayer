@@ -2,6 +2,12 @@
 #include <iostream>
 #include <cstring>
 #include <chrono>
+#include <sstream>
+#include <iomanip>
+
+#if DEBUG_ENABLED
+#include <fstream> // 用于调试日志记录
+#endif
 
 /* ========== GLSL ========== */
 static const char* vsrc = R"(#version 330 core
@@ -29,6 +35,11 @@ PlayerRender::~PlayerRender() { CleanUp(); }
 bool PlayerRender::Initialize() {
     if (!initSDL()) return false;
     if (!initGL())  return false;
+
+    #if DEBUG_ENABLED
+    resetStats();
+    #endif
+
     return true;
 }
 
@@ -114,7 +125,7 @@ void PlayerRender::Play()
 {
     if (playing && paused) {
         paused = false;
-        SDL_PauseAudioDevice(audioDev, 0); // 恢复音频
+        if (audioDev) SDL_PauseAudioDevice(audioDev, 0); // 恢复音频
         return;
     }
     if (playing) return;
@@ -173,6 +184,10 @@ void PlayerRender::Stop()
 
     playing = false;
     paused = false;
+
+    #if DEBUG_ENABLED
+    printSyncStats(); // 停止时自动打印统计信息
+    #endif
 }
 
 /* -------- Seek -------- */
@@ -195,6 +210,10 @@ void PlayerRender::Run()
     // 初始化视频队列统计
     int framesRendered = 0;
     auto startTime = std::chrono::steady_clock::now();
+
+    #if DEBUG_ENABLED
+    bool showStats = false;
+    #endif
 
     while (running) {
         handleEvents(running);
@@ -227,6 +246,7 @@ void PlayerRender::Run()
 
         SDL_GL_SwapWindow(win);
 
+        #if DEBUG_ENABLED
         // 显示帧率统计
         auto currentTime = std::chrono::steady_clock::now();
         auto elapsedSec = std::chrono::duration_cast<std::chrono::seconds>(currentTime - startTime).count();
@@ -237,6 +257,13 @@ void PlayerRender::Run()
             startTime = currentTime;
             framesRendered = 0;
         }
+
+        // 显示统计信息
+        if (showStats) {
+            printSyncStats();
+            showStats = false;
+        }
+        #endif
 
         // 避免CPU占用过高
         if (vq.size() < 5) {
@@ -814,6 +841,50 @@ void PlayerRender::renderOne()
         return;
     }
 
+    #if DEBUG_ENABLED
+    // 调试模式下收集音画同步数据
+    double master = 0.0;
+    double pts = 0.0;
+    double diff = 0.0;
+
+    if (audioReady.load() && aIdx != -1) {
+        master = getAudioClock();
+
+        if (frame->pts != AV_NOPTS_VALUE) {
+            pts = frame->pts * av_q2d(fmt->streams[vIdx]->time_base);
+        } else if (frame->pkt_dts != AV_NOPTS_VALUE) {
+            pts = frame->pkt_dts * av_q2d(fmt->streams[vIdx]->time_base);
+        } else {
+            pts = master;
+        }
+
+        diff = pts - master;
+
+        // 收集统计信息
+        syncStats.frameCount++;
+        syncStats.totalDiff += std::abs(diff);
+
+        if (diff > 0) {
+            if (diff > syncStats.maxVideoLead) syncStats.maxVideoLead = diff;
+        } else {
+            if (-diff > syncStats.maxAudioLead) syncStats.maxAudioLead = -diff;
+        }
+
+        if (diff < -0.01) {
+            syncStats.lateCount++;
+        }
+
+        // 调试输出
+        if (debugOutput) {
+            std::ostringstream oss;
+            oss << "Frame PTS: " << std::fixed << std::setprecision(3) << pts
+                << " | Audio: " << master
+                << " | Diff: " << diff * 1000 << " ms";
+            logDebug(oss.str());
+        }
+    }
+    #endif
+
     // 转换像素格式
     uint8_t* dst[4] = {vidBuf, nullptr, nullptr, nullptr};
     int dstStride[4] = {vw * 3, 0, 0, 0};
@@ -848,6 +919,20 @@ void PlayerRender::handleEvents(bool& running)
                         paused ? Play() : Pause();
                     }
                 }
+                #if DEBUG_ENABLED
+                else if (event.key.keysym.sym == SDLK_d) {
+                    debugOutput = !debugOutput;
+                    std::cout << "Debug output "
+                              << (debugOutput ? "ENABLED" : "DISABLED") << "\n";
+                }
+                else if (event.key.keysym.sym == SDLK_s) {
+                    printSyncStats();
+                }
+                else if (event.key.keysym.sym == SDLK_r) {
+                    resetStats();
+                    std::cout << "Sync statistics reset\n";
+                }
+                #endif
                 break;
 
             case SDL_WINDOWEVENT:
@@ -914,3 +999,43 @@ void PlayerRender::CleanUp()
 
     SDL_Quit();
 }
+
+#if DEBUG_ENABLED
+/* ==================== 调试功能实现 ==================== */
+
+void PlayerRender::logDebug(const std::string& message) const {
+    std::cout << "[DEBUG] " << message << "\n";
+
+    // 可选：记录到文件
+    static std::ofstream logFile("av_sync.log", std::ios::app);
+    if (logFile.is_open()) {
+        auto now = std::chrono::system_clock::now();
+        auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now.time_since_epoch()).count();
+
+        logFile << now_ms << " | " << message << "\n";
+    }
+}
+
+void PlayerRender::resetStats() {
+    syncStats = {};
+}
+
+void PlayerRender::printSyncStats() const {
+    if (syncStats.frameCount == 0) {
+        std::cout << "No frames rendered yet.\n";
+        return;
+    }
+
+    double avgDiff = syncStats.totalDiff / syncStats.frameCount;
+
+    std::cout << "\n===== 音画同步统计 =====\n";
+    std::cout << "已渲染帧数: " << syncStats.frameCount << "\n";
+    std::cout << "丢弃帧数: " << syncStats.dropCount << "\n";
+    std::cout << "延迟帧数: " << syncStats.lateCount << "\n";
+    std::cout << "平均时间差: " << avgDiff * 1000 << " ms\n";
+    std::cout << "视频最大领先: " << syncStats.maxVideoLead * 1000 << " ms\n";
+    std::cout << "音频最大领先: " << syncStats.maxAudioLead * 1000 << " ms\n";
+    std::cout << "========================\n";
+}
+#endif

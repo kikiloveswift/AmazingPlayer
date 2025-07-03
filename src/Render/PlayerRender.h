@@ -1,4 +1,3 @@
-// PlayerRender.h  — 2025-07-03 final (接口保持原样)
 #ifndef PLAYERRENDER_H
 #define PLAYERRENDER_H
 
@@ -20,36 +19,41 @@ extern "C" {
 #include <libswresample/swresample.h>
 }
 
+// 调试模式控制 - 在编译时定义 ENABLE_DEBUG 来启用调试功能
+// g++ -DENABLE_DEBUG ...
+#ifdef ENABLE_DEBUG
+    #define DEBUG_ENABLED 1
+#else
+    #define DEBUG_ENABLED 1
+#endif
+
 class PlayerRender {
 public:
     PlayerRender();
     ~PlayerRender();
 
-    bool Initialize();                                  // SDL + GL 常规初始化
-    bool LoadMedia(const std::string& file);            // 打开媒体
-    void Play();                                        // 开始 / 恢复
-    void Pause();                                       // 暂停
-    void Stop();                                        // 停止并清空
-    void Seek(double seconds);                          // （示例仅打印，留给你实现）
-    void Run();                                         // 主循环
-    void CleanUp();                                     // 释放全部资源
+    bool Initialize();
+    bool LoadMedia(const std::string& file);
+    void Play();
+    void Pause();
+    void Stop();
+    void Seek(double seconds);
+    void Run();
+    void CleanUp();
 
 private:
-    /* ---------- 常量 ---------- */
     static constexpr int WIN_W = 1280;
     static constexpr int WIN_H = 720;
-    static constexpr int MAX_VQ = 48;                   // ≤2 s 视频帧缓存
-    static constexpr int AUDIO_CACHE_MS = 1000;         // SDL 队列上限 1 s
+    static constexpr int MAX_VQ = 48;
+    static constexpr int AUDIO_CACHE_MS = 1000;
 
-    /* ---------- SDL/GL ---------- */
     SDL_Window*   win = nullptr;
     SDL_GLContext gl  = nullptr;
     SDL_AudioDeviceID audioDev = 0;
-    int bytesPerSec = 0;                                // 声道×采样率×bytes/sample
+    int bytesPerSec = 0;
 
     GLuint vao = 0, vbo = 0, ebo = 0, prog = 0, tex = 0;
 
-    /* ---------- FFmpeg ---------- */
     AVFormatContext* fmt = nullptr;
     AVCodecContext *vc = nullptr, *ac = nullptr;
     SwsContext* sws = nullptr;
@@ -60,22 +64,32 @@ private:
     int vw = 0, vh = 0;
     double videoFPS = 25.0;
 
-    /* ---------- 队列 / 线程 ---------- */
     std::queue<AVFrame*> vq;
     std::mutex   qMtx;
     std::condition_variable qCv;
     std::thread  decThread;
     std::atomic<bool> playing{false}, paused{false}, stopReq{false};
 
-    /* ---------- 音频时钟 ---------- */
-    std::atomic<double> audioWritePts{0.0};             // 下一采样绝对 PTS
+    std::atomic<double> audioWritePts{0.0};
     std::atomic<bool>   audioReady{false};
 
-    /* ---------- 缓冲 ---------- */
-    uint8_t* vidBuf = nullptr;                          // RGB24
-    uint8_t* audBuf = nullptr;                          // 重采样输出
+    uint8_t* vidBuf = nullptr;
+    uint8_t* audBuf = nullptr;
 
-    /* ---------- 私有工具 ---------- */
+    // 调试统计信息
+    #if DEBUG_ENABLED
+    struct SyncStats {
+        double maxVideoLead = 0.0;    // 视频最大领先时间
+        double maxAudioLead = 0.0;    // 音频最大领先时间
+        double totalDiff = 0.0;       // 总时间差
+        int frameCount = 0;           // 已渲染帧数
+        int dropCount = 0;            // 丢弃帧数
+        int lateCount = 0;            // 延迟帧数
+    } syncStats;
+
+    bool debugOutput = false;         // 实时调试输出开关
+    #endif
+
     bool initSDL();
     bool initGL();
     bool initShaders();
@@ -87,6 +101,12 @@ private:
     double getAudioClock() const;
     void   renderOne();
     void   handleEvents(bool& running);
+
+    #if DEBUG_ENABLED
+    void logDebug(const std::string& message) const;
+    void resetStats();
+    void printSyncStats() const;
+    #endif
 };
 
 #endif

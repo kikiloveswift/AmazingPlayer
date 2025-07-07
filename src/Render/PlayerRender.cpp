@@ -328,7 +328,16 @@ bool PlayerRender::initSDL()
     }
 
     // 设置垂直同步
-    SDL_GL_SetSwapInterval(1);
+    // 优先尝试自适应 VSync
+    if (SDL_GL_SetSwapInterval(-1) == 0) {
+        printf("Adaptive VSync supported.\n");
+    } else if (SDL_GL_SetSwapInterval(1) == 0) {
+        printf("Normal VSync supported.\n");
+    } else {
+        printf("VSync not supported, disabling VSync.\n");
+        // 彻底关闭 VSync
+        SDL_GL_SetSwapInterval(0);
+    }
 
     return true;
 }

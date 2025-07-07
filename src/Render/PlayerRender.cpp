@@ -259,6 +259,19 @@ void PlayerRender::Run()
             framesRendered = 0;
         }
 
+        //=== 保持宽高比的计算
+        int winWidth, winHeight;
+        SDL_GetWindowSize(win, &winWidth, &winHeight);
+
+        // 计算目标的尺寸
+        int targetWidth = winWidth;
+        int targetHeight = static_cast<int>(winWidth / aspectRatio);
+
+        // 计算居中位置
+        int x = (winWidth - targetWidth) / 2;
+        int y = (winHeight - targetHeight) / 2;
+        glViewport(x, y, targetWidth, targetHeight);
+
         // 显示统计信息
         if (showStats) {
             printSyncStats();
@@ -479,6 +492,9 @@ bool PlayerRender::openVideo(AVStream* stream)
     // 获取视频尺寸
     vw = vc->width;
     vh = vc->height;
+
+    // 计算实际的宽高比
+    aspectRatio = (vw > 0 && vh > 0) ? static_cast<float>(vw) / vh : 16.0f/9.0f;
 
     // 计算帧率
     AVRational frameRate = stream->avg_frame_rate;
@@ -1007,7 +1023,7 @@ void PlayerRender::handleEvents(bool& running)
 
             case SDL_WINDOWEVENT:
                 if (event.window.event == SDL_WINDOWEVENT_RESIZED) {
-                    glViewport(0, 0, event.window.data1, event.window.data2);
+                    // glViewport(0, 0, event.window.data1, event.window.data2);
                 }
                 break;
         }

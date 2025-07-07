@@ -49,6 +49,7 @@ private:
     static constexpr double SYNC_THRESHOLD = 0.03; // 30ms同步阈值
     static constexpr double MAX_AHEAD = 0.1;       // 视频最大领先100ms
     static constexpr double MAX_BEHIND = 0.5;      // 视频最大落后500ms
+    float aspectRatio = 16.0f/9.0f; // 默认 16 : 9
 
     SDL_Window*   win = nullptr;
     SDL_GLContext gl  = nullptr;
